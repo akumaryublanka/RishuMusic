@@ -237,12 +237,27 @@ def _record_download(**values):
     LAST_DL.update(values)
 
 
-def _yt_dlp_download_sync(video_id, video=False):
-    """Local fallback when OWN_API_URL is unavailable or returns an empty file."""
-    os.makedirs(DOWNLOAD_DIR, exist_ok=True)
-    source_url = f"https://www.youtube.com/watch?v={video_id}"
-    output_template = os.path.join(DOWNLOAD_DIR, f"{video_id}.%(ext)s")
+def _yt_dlp_cookie_file():
+    """Return an optional Netscape-format yt-dlp cookie file path.
 
+    Set YTDLP_COOKIES_FILE to a mounted Render secret-file path. For local
+    development, a cookies.txt beside the project is picked up automatically.
+    Cookie contents must never be committed to Git.
+    """
+    configured = os.environ.get("YTDLP_COOKIES_FILE", "").strip()
+    candidates = [configured] if configured else [
+        os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "cookies.txt")
+    ]
+    for candidate in candidates:
+        if candidate and os.path.isfile(candidate) and os.path.getsize(candidate) > 0:
+            return candidate
+    return None
+
+
+def _yt_dlp_options(video_id, video=False):
+    """Build shared yt-dlp options for download and format inspection."""
+    os.makedirs(DOWNLOAD_DIR, exist_ok=True)
+    output_template = os.path.join(DOWNLOAD_DIR, f"{video_id}.%(ext)s")
     options = {
         "format": (
             "best[height<=480][ext=mp4]/best[height<=480]/best"
@@ -260,6 +275,17 @@ def _yt_dlp_download_sync(video_id, video=False):
         "extractor_retries": 1,
         "overwrites": True,
     }
+    cookie_file = _yt_dlp_cookie_file()
+    if cookie_file:
+        options["cookiefile"] = cookie_file
+    return options
+
+
+def _yt_dlp_download_sync(video_id, video=False):
+    """Local fallback when OWN_API_URL is unavailable or returns an empty file."""
+    source_url = f"https://www.youtube.com/watch?v={video_id}"
+    options = _yt_dlp_options(video_id, video)
+
     if video:
         options["merge_output_format"] = "mp4"
     else:
@@ -549,7 +575,10 @@ class YouTubeAPI:
             link = self.base + link
         if "&" in link:
             link = link.split("&")[0]
-        ytdl_opts = {"quiet": True}
+        ytdl_opts = {"quiet": True, "no_warnings": True, "cachedir": False}
+        cookie_file = _yt_dlp_cookie_file()
+        if cookie_file:
+            ytdl_opts["cookiefile"] = cookie_file
         ydl = yt_dlp.YoutubeDL(ytdl_opts)
         with ydl:
             formats_available = []
