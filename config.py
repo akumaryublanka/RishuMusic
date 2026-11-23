@@ -74,11 +74,11 @@ GROQ_MODELS      = getenv("GROQ_MODELS", "")
 POLLINATIONS_KEY = getenv("POLLINATIONS_KEY", "")
 AI_AUTOPLAY      = getenv("AI_AUTOPLAY", "1")
 
-REPO_URL = "https://github.com/RishuBot/RishuMusic"
+REPO_URL = "https://github.com/akumaryublanka/RishuMusic"
 
 UPSTREAM_REPO = getenv(
     "UPSTREAM_REPO",
-    "https://github.com/RishuBot/RishuMusic",
+    "https://github.com/akumaryublanka/RishuMusic",
 )
 UPSTREAM_BRANCH = getenv("UPSTREAM_BRANCH", "main")
 GIT_TOKEN = getenv(
