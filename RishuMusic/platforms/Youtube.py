@@ -2,6 +2,7 @@ import asyncio
 import os
 import re
 import logging
+import time
 from typing import Union
 from urllib.parse import parse_qs, quote, urlparse
 import yt_dlp
@@ -180,70 +181,212 @@ def time_to_seconds(time):
     return sum(int(x) * 60 ** i for i, x in enumerate(reversed(stringt.split(":"))))
 
 
-async def download_song(link: str) -> str:
-    video_id = link.split("v=")[-1].split("&")[0] if "v=" in link else link
+LAST_DL = {}
+
+
+def _extract_video_id(link):
+    raw = str(link or "").strip()
+    if not raw:
+        return None
+
+    parsed = urlparse(raw)
+    if parsed.hostname:
+        query_id = (parse_qs(parsed.query).get("v") or [None])[0]
+        if query_id:
+            return query_id.strip()
+
+        host = parsed.hostname.lower()
+        parts = [part for part in parsed.path.split("/") if part]
+        if "youtu.be" in host and parts:
+            return parts[0].split("?")[0].strip()
+        for marker in ("shorts", "embed", "live", "v"):
+            if marker in parts:
+                index = parts.index(marker)
+                if index + 1 < len(parts):
+                    return parts[index + 1].split("?")[0].strip()
+
+    return raw.split("&", 1)[0].strip()
+
+
+def _valid_download(path):
+    try:
+        return bool(path and os.path.isfile(path) and os.path.getsize(path) > 10000)
+    except (OSError, TypeError, ValueError):
+        return False
+
+
+def _record_download(**values):
+    LAST_DL.clear()
+    LAST_DL.update(values)
+
+
+def _yt_dlp_download_sync(video_id, video=False):
+    """Local fallback when OWN_API_URL is unavailable or returns an empty file."""
+    os.makedirs(DOWNLOAD_DIR, exist_ok=True)
+    source_url = f"https://www.youtube.com/watch?v={video_id}"
+    output_template = os.path.join(DOWNLOAD_DIR, f"{video_id}.%(ext)s")
+
+    options = {
+        "format": (
+            "best[height<=480][ext=mp4]/best[height<=480]/best"
+            if video
+            else "bestaudio/best"
+        ),
+        "outtmpl": output_template,
+        "noplaylist": True,
+        "quiet": True,
+        "no_warnings": True,
+        "cachedir": False,
+        "socket_timeout": 20,
+        "retries": 1,
+        "fragment_retries": 1,
+        "extractor_retries": 1,
+        "overwrites": True,
+    }
+    if video:
+        options["merge_output_format"] = "mp4"
+    else:
+        options["postprocessors"] = [
+            {
+                "key": "FFmpegExtractAudio",
+                "preferredcodec": "mp3",
+                "preferredquality": "192",
+            }
+        ]
+
+    with yt_dlp.YoutubeDL(options) as ydl:
+        info = ydl.extract_info(source_url, download=True)
+        prepared = ydl.prepare_filename(info)
+
+    stem = os.path.splitext(prepared)[0]
+    candidates = (
+        [f"{stem}.mp4", os.path.join(DOWNLOAD_DIR, f"{video_id}.mp4"),
+         f"{stem}.mkv", f"{stem}.webm"]
+        if video
+        else [f"{stem}.mp3", os.path.join(DOWNLOAD_DIR, f"{video_id}.mp3"),
+              prepared, f"{stem}.m4a", f"{stem}.webm"]
+    )
+    for candidate in candidates:
+        if _valid_download(candidate):
+            return candidate
+
+    raise RuntimeError("yt-dlp finished without producing a usable media file")
+
+
+async def _download_media(link, video=False):
+    video_id = _extract_video_id(link)
     if not video_id or len(video_id) < 3:
+        _record_download(ok=False, why="Invalid YouTube video ID")
         return None
 
     os.makedirs(DOWNLOAD_DIR, exist_ok=True)
-    file_path = os.path.join(DOWNLOAD_DIR, f"{video_id}.mp3")
+    extension = ".mp4" if video else ".mp3"
+    file_path = os.path.join(DOWNLOAD_DIR, f"{video_id}{extension}")
 
-    if os.path.exists(file_path) and os.path.getsize(file_path) > 10000:
+    if _valid_download(file_path):
+        size_mb = round(os.path.getsize(file_path) / (1024 * 1024), 2)
+        _record_download(
+            ok=True, source="cache", wait=0, transfer=0, size_mb=size_mb
+        )
         return file_path
 
-    try:
-        async with aiohttp.ClientSession() as session:
-            stream_url = f"{API_URL}/stream/{video_id}?vid=false&quality=128"
-            async with session.get(stream_url, timeout=aiohttp.ClientTimeout(total=300)) as resp:
-                if resp.status != 200:
-                    return None
-                with open(file_path, "wb") as f:
-                    async for chunk in resp.content.iter_chunked(131072):
-                        f.write(chunk)
+    api_started = time.monotonic()
+    api_wait = 0.0
+    api_transfer = 0.0
+    api_error = "OWN_API_URL did not return a usable file"
 
-        if os.path.exists(file_path) and os.path.getsize(file_path) > 10000:
-            return file_path
+    try:
+        timeout = aiohttp.ClientTimeout(
+            total=90 if video else 30,
+            connect=8,
+            sock_read=45 if video else 20,
+        )
+        stream_url = (
+            f"{API_URL}/stream/{video_id}"
+            f"?vid={'true' if video else 'false'}"
+            f"&quality={480 if video else 128}"
+        )
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.get(stream_url) as response:
+                api_wait = round(time.monotonic() - api_started, 1)
+                if response.status != 200:
+                    api_error = f"OWN_API_URL HTTP {response.status}"
+                else:
+                    transfer_started = time.monotonic()
+                    with open(file_path, "wb") as output:
+                        async for chunk in response.content.iter_chunked(131072):
+                            output.write(chunk)
+                    api_transfer = round(time.monotonic() - transfer_started, 1)
+
+                    if _valid_download(file_path):
+                        size_mb = round(
+                            os.path.getsize(file_path) / (1024 * 1024), 2
+                        )
+                        _record_download(
+                            ok=True,
+                            source="OWN_API_URL",
+                            wait=api_wait,
+                            transfer=api_transfer,
+                            size_mb=size_mb,
+                        )
+                        return file_path
+                    api_error = "OWN_API_URL returned an empty or incomplete file"
+    except asyncio.TimeoutError:
+        api_wait = round(time.monotonic() - api_started, 1)
+        api_error = "OWN_API_URL timed out"
+    except Exception as exc:
+        api_wait = round(time.monotonic() - api_started, 1)
+        api_error = f"OWN_API_URL {type(exc).__name__}: {str(exc)[:100]}"
+
+    if os.path.exists(file_path) and not _valid_download(file_path):
+        try:
+            os.remove(file_path)
+        except OSError:
+            pass
+
+    fallback_started = time.monotonic()
+    try:
+        fallback_path = await asyncio.to_thread(
+            _yt_dlp_download_sync, video_id, video
+        )
+        fallback_elapsed = round(time.monotonic() - fallback_started, 1)
+        if _valid_download(fallback_path):
+            size_mb = round(
+                os.path.getsize(fallback_path) / (1024 * 1024), 2
+            )
+            _record_download(
+                ok=True,
+                source="yt-dlp fallback",
+                wait=api_wait,
+                transfer=fallback_elapsed,
+                size_mb=size_mb,
+            )
+            logger.warning(
+                "OWN_API_URL download unavailable for %s (%s); yt-dlp fallback succeeded",
+                video_id,
+                api_error,
+            )
+            return fallback_path
+        raise RuntimeError("fallback output file is missing or too small")
+    except Exception as exc:
+        fallback_elapsed = round(time.monotonic() - fallback_started, 1)
+        reason = f"{api_error}; yt-dlp {type(exc).__name__}: {str(exc)[:140]}"
+        _record_download(
+            ok=False,
+            why=reason,
+            wait=api_wait,
+            transfer=fallback_elapsed,
+        )
+        logger.warning("YouTube download failed for %s: %s", video_id, reason)
         return None
-    except Exception:
-        if os.path.exists(file_path):
-            try:
-                os.remove(file_path)
-            except Exception:
-                pass
-        return None
+
+
+async def download_song(link: str) -> str:
+    return await _download_media(link, video=False)
 
 
 async def download_video(link: str) -> str:
-    video_id = link.split("v=")[-1].split("&")[0] if "v=" in link else link
-    if not video_id or len(video_id) < 3:
-        return None
-
-    os.makedirs(DOWNLOAD_DIR, exist_ok=True)
-    file_path = os.path.join(DOWNLOAD_DIR, f"{video_id}.mp4")
-
-    if os.path.exists(file_path) and os.path.getsize(file_path) > 10000:
-        return file_path
-
-    try:
-        async with aiohttp.ClientSession() as session:
-            stream_url = f"{API_URL}/stream/{video_id}?vid=true&quality=480"
-            async with session.get(stream_url, timeout=aiohttp.ClientTimeout(total=600)) as resp:
-                if resp.status != 200:
-                    return None
-                with open(file_path, "wb") as f:
-                    async for chunk in resp.content.iter_chunked(131072):
-                        f.write(chunk)
-
-        if os.path.exists(file_path) and os.path.getsize(file_path) > 10000:
-            return file_path
-        return None
-    except Exception:
-        if os.path.exists(file_path):
-            try:
-                os.remove(file_path)
-            except Exception:
-                pass
-        return None
+    return await _download_media(link, video=True)
 
 
 class YouTubeAPI:
@@ -417,18 +560,20 @@ class YouTubeAPI:
         songvideo: Union[bool, str] = None,
         format_id: Union[bool, str] = None,
         title: Union[bool, str] = None,
-    ) -> str:
+    ) -> tuple:
         if videoid:
-            link = self.base + link
+            link = self.base + str(link)
         try:
             if video:
                 downloaded_file = await download_video(link)
             else:
                 downloaded_file = await download_song(link)
-            if downloaded_file:
+            if downloaded_file and _valid_download(downloaded_file):
                 return downloaded_file, True
             return None, False
-        except Exception:
+        except Exception as exc:
+            _record_download(ok=False, why=f"{type(exc).__name__}: {str(exc)[:140]}")
+            logger.exception("Unexpected YouTube download wrapper error")
             return None, False
 
 
