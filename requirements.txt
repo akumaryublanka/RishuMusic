@@ -10,6 +10,7 @@ hachoir
 httpx
 humanize
 requests
+six>=1.16.0
 python-dotenv
 pyyaml
 unidecode
