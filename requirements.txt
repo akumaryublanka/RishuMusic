@@ -17,8 +17,8 @@ unidecode
 tgcrypto
 
 ffmpeg-python
-py-tgcalls
-ntgcalls
+py-tgcalls==3.0.1
+ntgcalls==3.0.7
 motor
 psutil
 heroku3
