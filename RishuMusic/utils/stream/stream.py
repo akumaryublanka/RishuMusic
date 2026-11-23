@@ -561,7 +561,9 @@ async def stream(
                     file_path, direct = await _t("download", YouTube.download(
                         vidid, mystic, video=status, videoid=True
                     ))
-                except:
+                except Exception:
+                    raise AssistantErr(_["play_14"])
+                if not direct or not file_path or not os.path.isfile(file_path):
                     raise AssistantErr(_["play_14"])
                 await _t("join_call", shree.join_call(
                     chat_id,
@@ -627,7 +629,9 @@ async def stream(
             file_path, direct = await _t("download", YouTube.download(
                 vidid, mystic, videoid=True, video=status
             ))
-        except:
+        except Exception:
+            raise AssistantErr(_["play_14"])
+        if not direct or not file_path or not os.path.isfile(file_path):
             raise AssistantErr(_["play_14"])
         if await is_active_chat(chat_id):
             await put_queue(
