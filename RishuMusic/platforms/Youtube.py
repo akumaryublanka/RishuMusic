@@ -16,7 +16,7 @@ import aiohttp
 # OWN_API_URL = the existing audio/video stream source used by download_song/download_video.
 API_URL = os.environ.get("OWN_API_URL", "http://vapters.site").rstrip("/")
 ADAM_API_URL = os.environ.get(
-    "ADAM_MUSIC_API_URL", "https://adam-music-api.onrender.com"
+    "ADAM_MUSIC_API_URL", "https://adam-music-api-a20u.onrender.com"
 ).rstrip("/")
 ADAM_API_KEY = os.environ.get("ADAM_MUSIC_API_KEY", "").strip()
 
