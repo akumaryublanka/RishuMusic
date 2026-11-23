@@ -21,14 +21,30 @@ for _k, _v in list(os.environ.items()):
     if _v.strip() == "":
         del os.environ[_k]
 # Get this value from my.telegram.org/apps
-API_ID = int(getenv("API_ID","14050586"))
-API_HASH = getenv("API_HASH","42a60d9c657b106370c79bb0a8ac560c")
+API_ID = int(getenv("API_ID", "0"))
+API_HASH = getenv("API_HASH", "")
 
 # Get your token from @BotFather on Telegram.
 BOT_TOKEN = getenv("BOT_TOKEN")
 
+# Fail clearly instead of silently using credentials committed in source code.
+_missing_required = [
+    name
+    for name, value in {
+        "API_ID": API_ID,
+        "API_HASH": API_HASH,
+        "BOT_TOKEN": BOT_TOKEN,
+        "MONGO_DB_URI": MONGO_DB_URI,
+    }.items()
+    if not value
+]
+if _missing_required:
+    raise RuntimeError(
+        "Missing required environment variables: " + ", ".join(_missing_required)
+    )
+
 # Get your mongo url from cloud.mongodb.com
-MONGO_DB_URI = getenv("MONGO_DB_URI", "mongodb+srv://Krishna:pss968048@cluster0.4rfuzro.mongodb.net/?retryWrites=true&w=majority")
+MONGO_DB_URI = getenv("MONGO_DB_URI", "")
 
 
 ## Other vaes
@@ -81,8 +97,8 @@ ASSISTANT_LEAVE_TIME = int(getenv("ASSISTANT_LEAVE_TIME",  5400))
 
 
 # Get this credentials from https://developer.spotify.com/dashboard
-SPOTIFY_CLIENT_ID = getenv("SPOTIFY_CLIENT_ID", "1c21247d714244ddbb09925dac565aed")
-SPOTIFY_CLIENT_SECRET = getenv("SPOTIFY_CLIENT_SECRET", "709e1a2969664491b58200860623ef19")
+SPOTIFY_CLIENT_ID = getenv("SPOTIFY_CLIENT_ID", "")
+SPOTIFY_CLIENT_SECRET = getenv("SPOTIFY_CLIENT_SECRET", "")
 
 
 # Maximum limit for fetching playlist's track from youtube, spotify, apple links.
