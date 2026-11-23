@@ -25,6 +25,23 @@ DOWNLOAD_DIR = "downloads"
 logger = logging.getLogger(__name__)
 
 
+def _timeout_setting(name, default, maximum):
+    try:
+        value = float(os.environ.get(name, default))
+    except (TypeError, ValueError):
+        return float(default)
+    if value <= 0 or value > maximum:
+        return float(default)
+    return value
+
+
+# The default read timeout is above the old 20-second limit, which was
+# too aggressive for slower upstream media APIs. Values can be tuned in Render.
+OWN_API_CONNECT_TIMEOUT = _timeout_setting("OWN_API_CONNECT_TIMEOUT", 10, 120)
+OWN_API_READ_TIMEOUT = _timeout_setting("OWN_API_READ_TIMEOUT", 60, 300)
+OWN_API_TOTAL_TIMEOUT = _timeout_setting("OWN_API_TOTAL_TIMEOUT", 180, 1800)
+
+
 def _duration_label(seconds):
     try:
         total = max(0, int(seconds))
@@ -297,40 +314,57 @@ async def _download_media(link, video=False):
 
     try:
         timeout = aiohttp.ClientTimeout(
-            total=90 if video else 30,
-            connect=8,
-            sock_read=45 if video else 20,
+            total=min(1800, OWN_API_TOTAL_TIMEOUT * (3 if video else 1)),
+            connect=OWN_API_CONNECT_TIMEOUT,
+            sock_read=min(300, OWN_API_READ_TIMEOUT * (2 if video else 1)),
         )
         stream_url = (
             f"{API_URL}/stream/{video_id}"
             f"?vid={'true' if video else 'false'}"
             f"&quality={480 if video else 128}"
         )
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.get(stream_url) as response:
-                api_wait = round(time.monotonic() - api_started, 1)
-                if response.status != 200:
-                    api_error = f"OWN_API_URL HTTP {response.status}"
-                else:
-                    transfer_started = time.monotonic()
-                    with open(file_path, "wb") as output:
-                        async for chunk in response.content.iter_chunked(131072):
-                            output.write(chunk)
-                    api_transfer = round(time.monotonic() - transfer_started, 1)
+        partial_path = file_path + ".part"
+        try:
+            if os.path.exists(partial_path):
+                os.remove(partial_path)
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with session.get(stream_url) as response:
+                    api_wait = round(time.monotonic() - api_started, 1)
+                    if response.status != 200:
+                        api_error = f"OWN_API_URL HTTP {response.status}"
+                    else:
+                        content_type = (response.headers.get("Content-Type") or "").lower()
+                        if "text/html" in content_type or "application/json" in content_type:
+                            api_error = "OWN_API_URL returned an error page instead of media"
+                        else:
+                            transfer_started = time.monotonic()
+                            with open(partial_path, "wb") as output:
+                                async for chunk in response.content.iter_chunked(131072):
+                                    if chunk:
+                                        output.write(chunk)
+                            api_transfer = round(time.monotonic() - transfer_started, 1)
 
-                    if _valid_download(file_path):
-                        size_mb = round(
-                            os.path.getsize(file_path) / (1024 * 1024), 2
-                        )
-                        _record_download(
-                            ok=True,
-                            source="OWN_API_URL",
-                            wait=api_wait,
-                            transfer=api_transfer,
-                            size_mb=size_mb,
-                        )
-                        return file_path
-                    api_error = "OWN_API_URL returned an empty or incomplete file"
+                            if _valid_download(partial_path):
+                                os.replace(partial_path, file_path)
+                                size_mb = round(
+                                    os.path.getsize(file_path) / (1024 * 1024), 2
+                                )
+                                _record_download(
+                                    ok=True,
+                                    source="OWN_API_URL",
+                                    wait=api_wait,
+                                    transfer=api_transfer,
+                                    size_mb=size_mb,
+                                )
+                                return file_path
+                            api_error = "OWN_API_URL returned an empty or incomplete file"
+        finally:
+            # Never leave a partial response that could be mistaken for a track.
+            if os.path.exists(partial_path):
+                try:
+                    os.remove(partial_path)
+                except OSError:
+                    pass
     except asyncio.TimeoutError:
         api_wait = round(time.monotonic() - api_started, 1)
         api_error = "OWN_API_URL timed out"
