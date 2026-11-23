@@ -1,7 +1,6 @@
 import socket
 import time
 
-import heroku3
 from pyrogram import filters
 
 import config
@@ -63,14 +62,24 @@ async def sudo():
 
 
 def heroku():
+    """Configure Heroku controls only when this process is actually on Heroku."""
     global HAPP
-    if is_heroku:
-        if config.HEROKU_API_KEY and config.HEROKU_APP_NAME:
-            try:
-                Heroku = heroku3.from_key(config.HEROKU_API_KEY)
-                HAPP = Heroku.app(config.HEROKU_APP_NAME)
-                LOGGER(__name__).info(f"Heroku App Configured")
-            except BaseException:
-                LOGGER(__name__).warning(
-                    f"Please make sure your Heroku API Key and Your App name are configured correctly in the heroku."
-                )
+
+    if not is_heroku():
+        return
+
+    if not config.HEROKU_API_KEY or not config.HEROKU_APP_NAME:
+        LOGGER(__name__).info("Heroku controls are not configured; skipping.")
+        return
+
+    try:
+        # Import lazily: Render and other hosts do not need the Heroku SDK.
+        import heroku3
+
+        Heroku = heroku3.from_key(config.HEROKU_API_KEY)
+        HAPP = Heroku.app(config.HEROKU_APP_NAME)
+        LOGGER(__name__).info("Heroku App Configured")
+    except Exception as exc:
+        LOGGER(__name__).warning(
+            "Heroku controls could not be initialized: %s", type(exc).__name__
+        )
