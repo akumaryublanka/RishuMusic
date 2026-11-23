@@ -27,6 +27,9 @@ API_HASH = getenv("API_HASH", "")
 # Get your token from @BotFather on Telegram.
 BOT_TOKEN = getenv("BOT_TOKEN")
 
+# Get your mongo url from cloud.mongodb.com
+MONGO_DB_URI = getenv("MONGO_DB_URI", "")
+
 # Fail clearly instead of silently using credentials committed in source code.
 _missing_required = [
     name
@@ -42,9 +45,6 @@ if _missing_required:
     raise RuntimeError(
         "Missing required environment variables: " + ", ".join(_missing_required)
     )
-
-# Get your mongo url from cloud.mongodb.com
-MONGO_DB_URI = getenv("MONGO_DB_URI", "")
 
 
 ## Other vaes
