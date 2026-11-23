@@ -1,0 +1,22 @@
+# Runtime secrets — never commit exported account sessions or API keys
+.env
+.env.*
+!.env.example
+!sample.env
+cookies.txt
+cookie.txt
+cookies-*.txt
+*.cookies
+
+# Runtime downloads and temporary files
+downloads/
+*.part
+*.tmp
+
+# Python / local state
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+.DS_Store
